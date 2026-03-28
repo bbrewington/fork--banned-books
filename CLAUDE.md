@@ -69,7 +69,7 @@ Rscript etl/clean_georgia.R
 
 ## DuckDB Database
 
-`data/banned_books.duckdb` is built by `etl/build_db.R` — unions all `data/processed/cleaned_*.csv` and `data/raw/*/source_text_*.csv` into two tables (`cleaned_data`, `source_text`), each with a leading `state_name` column. Re-run after any ETL change:
+`data/banned_books.duckdb` is gitignored and must be generated locally. It is built by `etl/build_db.R` — unions all `data/processed/cleaned_*.csv` and `data/raw/*/source_text_*.csv` into two tables (`cleaned_data`, `source_text`), each with a leading `state_name` column. Re-run after any ETL change:
 ```bash
 Rscript etl/clean_<state>.R && Rscript etl/build_db.R
 ```
