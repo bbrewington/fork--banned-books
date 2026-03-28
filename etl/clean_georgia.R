@@ -3,18 +3,18 @@ library(dplyr)
 library(stringr)
 library(readr)
 
-pdf_path <- "data/raw/georgia/PRC_List_2025.pdf"
-out_path <- "data/processed/cleaned_georgia.csv"
+pdf_path     <- "data/raw/georgia/PRC_List_2025.pdf"
+out_path     <- "data/processed/cleaned_georgia.csv"
+out_path_raw <- "data/raw/georgia/source_text_georgia.csv"
 
 year_pat <- "^(20[0-9]{2}|201[0-9])$"
 
 # ---------------------------------------------------------------------------
 # 1. Read and normalize lines
 # ---------------------------------------------------------------------------
-raw_lines <- pdf_text(pdf_path) |>
-  paste(collapse = "\n") |>
-  str_split("\n") |>
-  unlist()
+pages     <- pdf_text(pdf_path)
+raw_lines <- unlist(str_split(pages, "\n"))
+line_page <- rep(seq_along(pages), times = lengths(str_split(pages, "\n")))
 
 # Classify each line by its leading marker (before trimming)
 line_type <- case_when(
@@ -59,6 +59,7 @@ for (i in seq_along(lines)) {
 keep <- !skip & nchar(lines) > 0
 joined      <- joined[keep]
 joined_type <- joined_type[keep]
+joined_page <- line_page[keep]
 
 # ---------------------------------------------------------------------------
 # 3. Walk through lines, tracking ban year and series context
@@ -67,6 +68,7 @@ records       <- list()
 ban_year      <- NA_character_
 series_author <- NA_character_   # author inherited by sub-bullets
 series_title  <- NA_character_   # series name prepended to sub-bullet titles
+series_line   <- NA_character_   # raw joined text of the series header bullet
 
 # Patterns
 # "Series" header if entry contains "Series" AND no publication date follows
@@ -336,6 +338,7 @@ for (i in seq_along(joined)) {
     ban_year      <- clean
     series_author <- NA_character_
     series_title  <- NA_character_
+    series_line   <- NA_character_
     next
   }
 
@@ -353,6 +356,7 @@ for (i in seq_along(joined)) {
     # Series title: everything before ":" or before "by"
     series_title <- str_trim(str_remove(clean, regex("(?::\\s*.*|\\s+by\\s+.*)$", ignore_case = TRUE)))
     if (is.na(series_title) || nchar(series_title) == 0) series_title <- NA_character_
+    series_line  <- txt
     next
   }
 
@@ -360,6 +364,7 @@ for (i in seq_along(joined)) {
   if (typ == "bullet") {
     series_author <- NA_character_
     series_title  <- NA_character_
+    series_line   <- NA_character_
   }
 
   # Parse title + author together
@@ -379,7 +384,10 @@ for (i in seq_along(joined)) {
     author           = author,
     date             = if (!is.na(ban_year)) as.integer(ban_year) else NA_integer_,
     publication_type = if (is_per) "periodical" else "book",
-    rejection_reason = NA_character_
+    rejection_reason = NA_character_,
+    pdf_page         = joined_page[i],
+    source_text      = joined[i],
+    parent_bullet    = series_line
   )
 }
 
@@ -392,7 +400,11 @@ result <- bind_rows(records) |>
     author = str_squish(author),
     date   = as.character(date)
   ) |>
-  filter(nchar(title) > 1)
+  filter(nchar(title) > 1) |>
+  mutate(row = row_number(), .before = 1)
 
-write_csv(result, out_path, na = "")
+write_csv(select(result, -source_text), out_path, na = "")
 message("Wrote ", nrow(result), " rows to ", out_path)
+
+write_csv(select(result, row, pdf_page, source_text, parent_bullet), out_path_raw, na = "")
+message("Wrote ", nrow(result), " rows to ", out_path_raw)
