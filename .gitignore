@@ -1,2 +1,5 @@
 .DS_Store
+data/*.sqlite
 data/*.duckdb
+.venv/
+__pycache__/

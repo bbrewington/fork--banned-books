@@ -1,43 +1,63 @@
+library(RSQLite)
 library(duckdb)
-library(dplyr)
-library(readr)
-library(stringr)
-
-db_path <- "data/banned_books.duckdb"
-
-# Remove existing DB so we always build fresh
-if (file.exists(db_path)) file.remove(db_path)
-con <- dbConnect(duckdb(), db_path)
 
 # ---------------------------------------------------------------------------
+# Build DuckDB via native glob queries
 # cleaned_data: union all data/processed/cleaned_<state>.csv
-# Skip the empty template file (cleaned_state_name.csv)
-# ---------------------------------------------------------------------------
-cleaned_files <- setdiff(
-  Sys.glob("data/processed/cleaned_*.csv"),
-  "data/processed/cleaned_state_name.csv"
-)
-
-cleaned <- bind_rows(lapply(cleaned_files, function(f) {
-  state <- basename(f) |> str_remove("^cleaned_") |> str_remove("\\.csv$")
-  read_csv(f, show_col_types = FALSE) |> mutate(state_name = state, .before = 1)
-}))
-
-dbWriteTable(con, "cleaned_data", cleaned, overwrite = TRUE)
-message("cleaned_data: ", nrow(cleaned), " rows from ", length(cleaned_files), " states")
-
-# ---------------------------------------------------------------------------
+#   (skip the empty template file cleaned_state_name.csv)
 # source_text: union all data/raw/<state>/source_text_{state_name}.csv
+# union_by_name = true handles states with extra columns (e.g. CA: publisher)
 # ---------------------------------------------------------------------------
-raw_files <- Sys.glob("data/raw/*/source_text_*.csv")
 
-source <- bind_rows(lapply(raw_files, function(f) {
-  state <- basename(dirname(f))
-  read_csv(f, show_col_types = FALSE) |> mutate(state_name = state, .before = 1)
-}))
+duckdb_db_path <- "data/banned_books.duckdb"
+if (file.exists(duckdb_db_path)) file.remove(duckdb_db_path)
+con_duckdb <- dbConnect(duckdb(), dbdir = duckdb_db_path)
 
-dbWriteTable(con, "source_text", source, overwrite = TRUE)
-message("source_text:  ", nrow(source), " rows from ", length(raw_files), " states")
+dbExecute(con_duckdb, "
+  CREATE TABLE cleaned_data AS
+  SELECT
+    regexp_extract(filename, 'cleaned_([^/]+)\\.csv$', 1) AS state_name,
+    * EXCLUDE (filename)
+  FROM read_csv('data/processed/cleaned_*.csv', filename = true, union_by_name = true)
+  WHERE filename NOT LIKE '%cleaned_state_name.csv'
+")
 
-dbDisconnect(con)
-message("Written to ", db_path)
+dbExecute(con_duckdb, "
+  CREATE TABLE source_text AS
+  SELECT
+    regexp_extract(filename, '/([^/]+)/source_text_', 1) AS state_name,
+    * EXCLUDE (filename)
+  FROM read_csv('data/raw/*/source_text_*.csv', filename = true, union_by_name = true)
+")
+
+# ---------------------------------------------------------------------------
+# Build SQLite by reading back from DuckDB
+# ---------------------------------------------------------------------------
+
+sqlite_db_path <- "data/banned_books.sqlite"
+if (file.exists(sqlite_db_path)) file.remove(sqlite_db_path)
+con_sqlite <- dbConnect(drv = SQLite(), dbname = sqlite_db_path)
+
+dbWriteTable(con_sqlite, "cleaned_data", dbReadTable(con_duckdb, "cleaned_data"))
+dbWriteTable(con_sqlite, "source_text",  dbReadTable(con_duckdb, "source_text"))
+
+dbDisconnect(con_sqlite)
+dbDisconnect(con_duckdb)
+
+# ---------------------------------------------------------------------------
+# Print out helper message for data usage
+# ---------------------------------------------------------------------------
+
+message("\nTo explore with datasette:\n\n$ datasette ", sqlite_db_path)
+
+message(
+  "\n-----------------------------------------\n\n",
+  "To explore with DuckDB:\n\n",
+  "option 1 (preferred): duckdb UI\n-------------------------------\n",
+  "$ duckdb ", duckdb_db_path, " -ui\n",
+  "(query data in browser in the DuckDB UI)\n",
+  "D .quit\n\n",
+  "option 2: query via DuckDB CLI\n------------------------------\n",
+  "$ duckdb ", duckdb_db_path,
+  "\nD select * from cleaned_data;\nD .quit"
+)
